@@ -42,9 +42,9 @@ impl<const BLOCK_SIZE: usize> Disk<BLOCK_SIZE> {
         Ok(block)
     }
 
-    pub fn write_block(&mut self, num: usize, data: &[u8; BLOCK_SIZE]) -> DiskResult<()> {
+    pub fn write_block(&mut self, num: usize, data: [u8; BLOCK_SIZE]) -> DiskResult<()> {
         self.backing_file
-            .write_all_at(data, (num * BLOCK_SIZE) as u64)?;
+            .write_all_at(&data, (num * BLOCK_SIZE) as u64)?;
         Ok(())
     }
 
@@ -63,7 +63,7 @@ mod tests {
         const BLOCK_SIZE: usize = 512;
         let mut disk: Disk<BLOCK_SIZE> = Disk::open("disk.bin", BLOCK_SIZE * 32).unwrap();
         let block = [0x42; BLOCK_SIZE];
-        disk.write_block(15, &block).unwrap();
+        disk.write_block(15, block).unwrap();
         assert_eq!(disk.read_block(15).unwrap(), block);
         fs::remove_file("disk.bin").unwrap();
     }
