@@ -60,11 +60,12 @@ mod tests {
 
     #[test]
     fn write_read_works() {
+        const DISK_PATH: &str = "disk.bin";
         const BLOCK_SIZE: usize = 512;
-        let mut disk: Disk<BLOCK_SIZE> = Disk::open("disk.bin", BLOCK_SIZE * 32).unwrap();
+        let mut disk: Disk<BLOCK_SIZE> = Disk::open(DISK_PATH, BLOCK_SIZE * 32).unwrap();
         let block = [0x42; BLOCK_SIZE];
         disk.write_block(15, block).unwrap();
         assert_eq!(disk.read_block(15).unwrap(), block);
-        fs::remove_file("disk.bin").unwrap();
+        fs::remove_file(DISK_PATH).unwrap();
     }
 }

@@ -9,8 +9,8 @@ mod disk;
 mod structures;
 
 // hardcoded until const generics are stable
-const BLOCK_SIZE: usize = 256;
-const DEFAULT_DISK_SIZE: usize = 10240;
+pub const BLOCK_SIZE: usize = 256;
+pub const DEFAULT_DISK_SIZE: usize = 10240;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TfsError {
@@ -220,6 +220,7 @@ impl Root {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct TfsDesc(usize);
 
 #[derive(Debug, Clone, Copy)]

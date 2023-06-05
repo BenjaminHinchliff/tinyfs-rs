@@ -59,6 +59,7 @@ pub struct RootData {
 }
 
 impl RootData {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             inodes: [0; ROOT_INODES],
@@ -95,6 +96,7 @@ pub struct INodeData {
 }
 
 impl INodeData {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             filename: [0; MAX_FILENAME_LEN],
@@ -124,8 +126,6 @@ impl From<INode> for INodeData {
         }
     }
 }
-
-pub type Data = [u8; BLOCK_SIZE];
 
 #[cfg(test)]
 mod tests {
