@@ -83,11 +83,13 @@ impl TryFrom<Root> for RootData {
 
 const MAX_FILENAME_LEN: usize = 8;
 const INODE_BLOCKS: usize =
-    (BLOCK_SIZE - mem::size_of::<[u8; MAX_FILENAME_LEN]>()) / mem::size_of::<u16>();
+    (BLOCK_SIZE - mem::size_of::<[u8; MAX_FILENAME_LEN]>() - mem::size_of::<u16>())
+        / mem::size_of::<u16>();
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct INodeData {
     pub filename: [u8; MAX_FILENAME_LEN],
+    pub size: u16,
     #[serde(with = "BigArray")]
     pub blocks: [u16; INODE_BLOCKS],
 }
@@ -96,6 +98,7 @@ impl INodeData {
     pub fn new() -> Self {
         Self {
             filename: [0; MAX_FILENAME_LEN],
+            size: 0,
             blocks: [0; INODE_BLOCKS],
         }
     }
@@ -105,17 +108,19 @@ impl From<INode> for INodeData {
     fn from(
         INode {
             filename,
-            mut data_blocks,
+            size,
+            mut blocks,
             ..
         }: INode,
     ) -> Self {
         let filename = CString::new(filename).unwrap();
         let mut filename = filename.into_bytes();
         filename.resize(MAX_FILENAME_LEN, 0);
-        data_blocks.resize(INODE_BLOCKS, 0);
+        blocks.resize(INODE_BLOCKS, 0);
         Self {
             filename: filename.try_into().unwrap(),
-            blocks: data_blocks.try_into().unwrap(),
+            size,
+            blocks: blocks.try_into().unwrap(),
         }
     }
 }
