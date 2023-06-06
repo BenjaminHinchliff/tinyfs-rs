@@ -1,8 +1,48 @@
-use std::{io::Write, println};
-
+use ansi_term::Color;
 use anyhow::Result;
-use tempfile::NamedTempFile;
+use image::{imageops, Pixel, Rgb, RgbImage};
 use tinyfs_rs::{Tfs, BLOCK_SIZE, DEFAULT_DISK_SIZE};
+
+fn to_ascii(image: &RgbImage) -> String {
+    let (width, height) = image.dimensions();
+    let mut ascii = String::new();
+
+    let mut last_color: Option<Color> = None;
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = image.get_pixel(x, y);
+            let intensity = pixel.to_luma()[0];
+            let ascii_char = intensity_to_ascii(intensity);
+            let color = rgb_to_color(pixel);
+            let ansi = if let Some(last_color) = last_color {
+                last_color.infix(color).to_string()
+            } else {
+                color.prefix().to_string()
+            };
+            ascii.push_str(&ansi);
+            ascii.push(ascii_char);
+            last_color = Some(color);
+        }
+        ascii.push('\n');
+    }
+    if let Some(color) = last_color {
+        ascii.push_str(&color.suffix().to_string())
+    }
+
+    ascii
+}
+
+fn rgb_to_color(rgb: &Rgb<u8>) -> Color {
+    Color::RGB(rgb[0], rgb[1], rgb[2])
+}
+
+fn intensity_to_ascii(intensity: u8) -> char {
+    let ascii_chars = [' ', '░', '▒', '▓', '█'];
+    let num_chars = ascii_chars.len();
+
+    let scaled_intensity = (intensity as usize * (num_chars - 1)) / u8::MAX as usize;
+    ascii_chars[scaled_intensity]
+}
 
 fn main() -> Result<()> {
     {
@@ -38,10 +78,13 @@ fn main() -> Result<()> {
             cat.push(byte);
         }
 
-        println!("opening cat.jpg in default image viewer...");
-        let mut file = NamedTempFile::new()?;
-        file.write_all(&cat)?;
-        open::that(file.path())?;
+        println!("printing cat.jpg");
+        let img = image::load_from_memory(&cat)?;
+        let resized_image = imageops::resize(&img.to_rgb8(), 100, 50, image::imageops::Nearest);
+        println!("{}", to_ascii(&resized_image));
+        println!(
+            "(if the image looks weird check if your terminal supports 24-bit color and unicode)"
+        );
     }
     Ok(())
 }
