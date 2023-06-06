@@ -1,6 +1,6 @@
 use std::{
     fs::{File, OpenOptions},
-    os::unix::prelude::FileExt,
+    io::{prelude::*, SeekFrom},
     path::Path,
 };
 
@@ -35,16 +35,18 @@ impl<const BLOCK_SIZE: usize> Disk<BLOCK_SIZE> {
         Ok(Disk { backing_file })
     }
 
-    pub fn read_block(&self, num: usize) -> DiskResult<[u8; BLOCK_SIZE]> {
+    pub fn read_block(&mut self, num: usize) -> DiskResult<[u8; BLOCK_SIZE]> {
         let mut block = [0; BLOCK_SIZE];
         self.backing_file
-            .read_exact_at(&mut block, (num * BLOCK_SIZE) as u64)?;
+            .seek(SeekFrom::Start((num * BLOCK_SIZE) as u64))?;
+        self.backing_file.read_exact(&mut block)?;
         Ok(block)
     }
 
     pub fn write_block(&mut self, num: usize, data: [u8; BLOCK_SIZE]) -> DiskResult<()> {
         self.backing_file
-            .write_all_at(&data, (num * BLOCK_SIZE) as u64)?;
+            .seek(SeekFrom::Start((num * BLOCK_SIZE) as u64))?;
+        self.backing_file.write_all(&data)?;
         Ok(())
     }
 

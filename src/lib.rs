@@ -125,7 +125,7 @@ impl INode {
 
     pub fn from_block<const BLOCK_SIZE: usize>(
         block: u16,
-        disk: &Disk<BLOCK_SIZE>,
+        disk: &mut Disk<BLOCK_SIZE>,
     ) -> TfsResult<Self> {
         let data = disk.read_block(block as usize)?;
         let INodeData {
@@ -185,7 +185,7 @@ impl Root {
 
     pub fn from_data<const DISK_SIZE: usize>(
         data: RootData,
-        disk: &Disk<DISK_SIZE>,
+        disk: &mut Disk<DISK_SIZE>,
     ) -> TfsResult<Self> {
         let mut inodes = Vec::new();
         for block in data.inodes.into_iter().filter(|b| *b != 0) {
@@ -261,7 +261,7 @@ impl<const BLOCK_SIZE: usize> Tfs<BLOCK_SIZE> {
     }
 
     pub fn mount(path: impl AsRef<Path>) -> TfsResult<Self> {
-        let disk: Disk<BLOCK_SIZE> = Disk::open(path, 0)?;
+        let mut disk: Disk<BLOCK_SIZE> = Disk::open(path, 0)?;
         let superblock = disk.read_block(0)?;
         if superblock[0] != 0x5A {
             return Err(TfsError::MagicNumberError(superblock[0]));
@@ -271,7 +271,7 @@ impl<const BLOCK_SIZE: usize> Tfs<BLOCK_SIZE> {
         let root: RootData = bincode::deserialize(&root)?;
         Ok(Self {
             superblock: superblock.into(),
-            root: Root::from_data(root, &disk)?,
+            root: Root::from_data(root, &mut disk)?,
             open_files: Vec::new(),
             disk,
         })
@@ -316,6 +316,7 @@ impl<const BLOCK_SIZE: usize> Tfs<BLOCK_SIZE> {
                 .allocate_block()
                 .ok_or(TfsError::OutOfSpace)?;
             inode.push_block(block);
+            let bytes_written = bytes.len();
             let bytes = if bytes.len() == BLOCK_SIZE {
                 bytes.try_into().unwrap()
             } else {
@@ -324,8 +325,8 @@ impl<const BLOCK_SIZE: usize> Tfs<BLOCK_SIZE> {
                 bytes.try_into().unwrap()
             };
             self.disk.write_block(block as usize, bytes)?;
-            inode.size += bytes.len() as u16;
-            file.offset += bytes.len();
+            inode.size += bytes_written as u16;
+            file.offset += bytes_written;
         }
         file.offset = 0;
         self.sync()?;
@@ -371,7 +372,7 @@ mod tests {
     fn mkfs_works() {
         const DISK_PATH: &str = "mkfs-disk.bin";
         Tfs::<BLOCK_SIZE>::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
-        let disk: Disk<BLOCK_SIZE> = Disk::open(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
+        let mut disk: Disk<BLOCK_SIZE> = Disk::open(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
         let superblock = disk.read_block(0).unwrap();
         let superblock: SuperBlockData = bincode::deserialize(&superblock).unwrap();
         assert_eq!(superblock.magic_number, 0x5A);

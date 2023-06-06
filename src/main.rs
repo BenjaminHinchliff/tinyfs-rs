@@ -1,9 +1,14 @@
+use std::io::Write;
+
+use ansi_colours::ColourExt;
 use ansi_term::Color;
 use anyhow::Result;
 use image::{imageops, Pixel, Rgb, RgbImage};
+use supports_color::{ColorLevel, Stream};
+use tempfile::NamedTempFile;
 use tinyfs_rs::{Tfs, BLOCK_SIZE, DEFAULT_DISK_SIZE};
 
-fn to_ascii(image: &RgbImage) -> String {
+fn to_ascii(image: &RgbImage, color_support: Option<ColorLevel>) -> String {
     let (width, height) = image.dimensions();
     let mut ascii = String::new();
 
@@ -13,15 +18,23 @@ fn to_ascii(image: &RgbImage) -> String {
             let pixel = image.get_pixel(x, y);
             let intensity = pixel.to_luma()[0];
             let ascii_char = intensity_to_ascii(intensity);
-            let color = rgb_to_color(pixel);
-            let ansi = if let Some(last_color) = last_color {
-                last_color.infix(color).to_string()
-            } else {
-                color.prefix().to_string()
-            };
-            ascii.push_str(&ansi);
+            if let Some(color_level) = color_support {
+                let color = if color_level.has_16m {
+                    rgb_to_color(pixel)
+                } else if color_level.has_256 {
+                    rgb_to_color(pixel).to_256()
+                } else {
+                    Color::White
+                };
+                let ansi = if let Some(last_color) = last_color {
+                    last_color.infix(color).to_string()
+                } else {
+                    color.prefix().to_string()
+                };
+                ascii.push_str(&ansi);
+                last_color = Some(color);
+            }
             ascii.push(ascii_char);
-            last_color = Some(color);
         }
         ascii.push('\n');
     }
@@ -80,11 +93,14 @@ fn main() -> Result<()> {
 
         println!("printing cat.jpg");
         let img = image::load_from_memory(&cat)?;
-        let resized_image = imageops::resize(&img.to_rgb8(), 100, 50, image::imageops::Nearest);
-        println!("{}", to_ascii(&resized_image));
-        println!(
-            "(if the image looks weird check if your terminal supports 24-bit color and unicode)"
-        );
+        let resized_image = imageops::resize(&img.to_rgb8(), 60, 30, image::imageops::Nearest);
+        let color_support = supports_color::on(Stream::Stdout);
+        println!("{}", to_ascii(&resized_image, color_support));
+
+        // also try to open the file but it might not work
+        let mut tmp = NamedTempFile::new()?;
+        tmp.write_all(&cat)?;
+        let _ = open::that(tmp.path());
     }
     Ok(())
 }
