@@ -60,7 +60,7 @@ fn intensity_to_ascii(intensity: u8) -> char {
 fn main() -> Result<()> {
     {
         println!("making filesystem...");
-        Tfs::<BLOCK_SIZE>::mkfs("test.bin", DEFAULT_DISK_SIZE)?;
+        Tfs::<BLOCK_SIZE>::mkfs("demo.disk", DEFAULT_DISK_SIZE)?;
         println!("mouting filesystem...");
         let mut tfs = Tfs::<BLOCK_SIZE>::mount("test.bin")?;
         println!("creating test.txt - a file containing \"Hello, World!\"");
