@@ -6,7 +6,7 @@ use std::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum DiskError {
-    #[error("Disk IO Error: {0}")]
+    #[error("{0}")]
     IoError(#[from] std::io::Error),
     #[error("Disk Size is Invalid - disk size must be a multiple of {block_size}")]
     InvalidSize { block_size: usize },

@@ -230,14 +230,14 @@ pub struct TfsFile {
 }
 
 #[derive(Debug)]
-pub struct Tfs<const BLOCK_SIZE: usize> {
+pub struct Tfs {
     superblock: SuperBlock,
     root: Root,
     open_files: Vec<TfsFile>,
     disk: Disk<BLOCK_SIZE>,
 }
 
-impl<const BLOCK_SIZE: usize> Tfs<BLOCK_SIZE> {
+impl Tfs {
     pub fn new(disk: Disk<BLOCK_SIZE>) -> Self {
         let mut superblock = SuperBlock::new();
         superblock.mark_allocated(0);
@@ -356,7 +356,7 @@ impl<const BLOCK_SIZE: usize> Tfs<BLOCK_SIZE> {
     }
 }
 
-impl<const BLOCK_SIZE: usize> Drop for Tfs<BLOCK_SIZE> {
+impl Drop for Tfs {
     fn drop(&mut self) {
         self.sync().unwrap();
     }
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn mkfs_works() {
         const DISK_PATH: &str = "mkfs-disk.bin";
-        Tfs::<BLOCK_SIZE>::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
+        Tfs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
         let mut disk: Disk<BLOCK_SIZE> = Disk::open(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
         let superblock = disk.read_block(0).unwrap();
         let superblock: SuperBlockData = bincode::deserialize(&superblock).unwrap();
@@ -383,16 +383,16 @@ mod tests {
     #[test]
     fn mount_works() {
         const DISK_PATH: &str = "mount-disk.bin";
-        Tfs::<BLOCK_SIZE>::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
-        let _tfs = Tfs::<BLOCK_SIZE>::mount(DISK_PATH).unwrap();
+        Tfs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
+        let _tfs = Tfs::mount(DISK_PATH).unwrap();
         fs::remove_file(DISK_PATH).unwrap();
     }
 
     #[test]
     fn open_works() {
         const DISK_PATH: &str = "open-disk.bin";
-        Tfs::<BLOCK_SIZE>::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
-        let mut tfs = Tfs::<BLOCK_SIZE>::mount(DISK_PATH).unwrap();
+        Tfs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
+        let mut tfs = Tfs::mount(DISK_PATH).unwrap();
         let _desc = tfs.open("test.txt").unwrap();
         fs::remove_file(DISK_PATH).unwrap();
     }
@@ -400,9 +400,9 @@ mod tests {
     #[test]
     fn write_works() {
         const DISK_PATH: &str = "write-disk.bin";
-        Tfs::<BLOCK_SIZE>::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
+        Tfs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
         {
-            let mut tfs = Tfs::<BLOCK_SIZE>::mount(DISK_PATH).unwrap();
+            let mut tfs = Tfs::mount(DISK_PATH).unwrap();
             let desc = tfs.open("test.txt").unwrap();
             tfs.write(desc, &"Hello, World!".as_bytes()).unwrap();
             let harry = include_bytes!("../harry-sm.jpg");
@@ -410,7 +410,7 @@ mod tests {
             tfs.write(desc2, harry).unwrap();
         }
         {
-            let tfs = Tfs::<BLOCK_SIZE>::mount(DISK_PATH).unwrap();
+            let tfs = Tfs::mount(DISK_PATH).unwrap();
             assert_eq!(tfs.root.inodes.len(), 2);
         }
         fs::remove_file(DISK_PATH).unwrap();

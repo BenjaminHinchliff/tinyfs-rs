@@ -6,7 +6,7 @@ use anyhow::Result;
 use image::{imageops, Pixel, Rgb, RgbImage};
 use supports_color::{ColorLevel, Stream};
 use tempfile::NamedTempFile;
-use tinyfs_rs::{Tfs, BLOCK_SIZE, DEFAULT_DISK_SIZE};
+use tinyfs_rs::{Tfs, DEFAULT_DISK_SIZE};
 
 fn to_ascii(image: &RgbImage, color_support: Option<ColorLevel>) -> String {
     let (width, height) = image.dimensions();
@@ -58,11 +58,12 @@ fn intensity_to_ascii(intensity: u8) -> char {
 }
 
 fn main() -> Result<()> {
+    const DISK_PATH: &str = "demo.disk";
     {
         println!("making filesystem...");
-        Tfs::<BLOCK_SIZE>::mkfs("demo.disk", DEFAULT_DISK_SIZE)?;
+        Tfs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE)?;
         println!("mouting filesystem...");
-        let mut tfs = Tfs::<BLOCK_SIZE>::mount("test.bin")?;
+        let mut tfs = Tfs::mount(DISK_PATH)?;
         println!("creating test.txt - a file containing \"Hello, World!\"");
         let desc = tfs.open("test.txt")?;
         tfs.write(desc, &"Hello, World!".as_bytes())?;
@@ -74,7 +75,7 @@ fn main() -> Result<()> {
     }
     {
         println!("mouting filesystem...");
-        let mut tfs = Tfs::<BLOCK_SIZE>::mount("test.bin")?;
+        let mut tfs = Tfs::mount(DISK_PATH)?;
 
         println!("reading test.txt");
         let desc = tfs.open("test.txt")?;
