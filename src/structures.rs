@@ -1,9 +1,9 @@
-use std::{ffi::CString, mem};
+use std::{ffi::CString, mem, time::UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 
-use crate::{INode, Root, SuperBlock, TfsError, TfsResult, BLOCK_SIZE, DEFAULT_DISK_SIZE};
+use crate::{INode, Root, Stat, SuperBlock, TfsError, TfsResult, BLOCK_SIZE, DEFAULT_DISK_SIZE};
 
 pub const ALLOCATION_TABLE_LEN: usize = BLOCK_SIZE - mem::size_of::<u8>() - mem::size_of::<u16>();
 const MAX_BLOCKS: usize = (ALLOCATION_TABLE_LEN) * 8;
@@ -83,14 +83,54 @@ impl TryFrom<Root> for RootData {
 }
 
 const MAX_FILENAME_LEN: usize = 8;
-const INODE_BLOCKS: usize =
-    (BLOCK_SIZE - mem::size_of::<[u8; MAX_FILENAME_LEN]>() - mem::size_of::<u16>())
-        / mem::size_of::<u16>();
+// can't use struct size for Statdata due to padding
+const INODE_BLOCKS: usize = (BLOCK_SIZE
+    - mem::size_of::<[u8; MAX_FILENAME_LEN]>()
+    - mem::size_of::<u16>()
+    - mem::size_of::<u32>() * 3)
+    / mem::size_of::<u16>();
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StatData {
+    pub size: u16,
+    pub ctime: u32,
+    pub mtime: u32,
+    pub atime: u32,
+}
+
+impl StatData {
+    pub fn new() -> Self {
+        Self {
+            size: 0,
+            ctime: 0,
+            mtime: 0,
+            atime: 0,
+        }
+    }
+}
+
+impl From<Stat> for StatData {
+    fn from(
+        Stat {
+            size,
+            ctime,
+            mtime,
+            atime,
+        }: Stat,
+    ) -> Self {
+        Self {
+            size,
+            ctime: ctime.duration_since(UNIX_EPOCH).unwrap().as_secs() as u32,
+            mtime: mtime.duration_since(UNIX_EPOCH).unwrap().as_secs() as u32,
+            atime: atime.duration_since(UNIX_EPOCH).unwrap().as_secs() as u32,
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct INodeData {
     pub filename: [u8; MAX_FILENAME_LEN],
-    pub size: u16,
+    pub stat: StatData,
     #[serde(with = "BigArray")]
     pub blocks: [u16; INODE_BLOCKS],
 }
@@ -100,7 +140,7 @@ impl INodeData {
     pub fn new() -> Self {
         Self {
             filename: [0; MAX_FILENAME_LEN],
-            size: 0,
+            stat: StatData::new(),
             blocks: [0; INODE_BLOCKS],
         }
     }
@@ -110,7 +150,7 @@ impl From<INode> for INodeData {
     fn from(
         INode {
             filename,
-            size,
+            stat,
             mut blocks,
             ..
         }: INode,
@@ -121,7 +161,7 @@ impl From<INode> for INodeData {
         blocks.resize(INODE_BLOCKS, 0);
         Self {
             filename: filename.try_into().unwrap(),
-            size,
+            stat: stat.into(),
             blocks: blocks.try_into().unwrap(),
         }
     }

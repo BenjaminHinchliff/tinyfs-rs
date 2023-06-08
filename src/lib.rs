@@ -1,7 +1,11 @@
-use std::{ffi::CString, path::Path};
+use std::{
+    ffi::CString,
+    path::Path,
+    time::{Duration, SystemTime},
+};
 
 use disk::Disk;
-use structures::{INodeData, ALLOCATION_TABLE_LEN};
+use structures::{INodeData, StatData, ALLOCATION_TABLE_LEN};
 
 use crate::structures::{RootData, SuperBlockData};
 
@@ -28,6 +32,8 @@ pub enum TfsError {
     OutOfSpace,
     #[error("File Referenced by file descriptor not found")]
     InvalidDesc,
+    #[error("Unable to find file {0}")]
+    FileNotFound(String),
 }
 
 pub type TfsResult<T> = Result<T, TfsError>;
@@ -104,11 +110,48 @@ impl From<SuperBlockData> for SuperBlock {
 }
 
 #[derive(Debug, Clone)]
+pub struct Stat {
+    pub size: u16,
+    pub ctime: SystemTime,
+    pub mtime: SystemTime,
+    pub atime: SystemTime,
+}
+
+impl Stat {
+    pub fn new() -> Self {
+        Self {
+            size: 0,
+            ctime: SystemTime::now(),
+            mtime: SystemTime::now(),
+            atime: SystemTime::now(),
+        }
+    }
+}
+
+impl From<StatData> for Stat {
+    fn from(
+        StatData {
+            size,
+            ctime,
+            mtime,
+            atime,
+        }: StatData,
+    ) -> Self {
+        Self {
+            size,
+            ctime: SystemTime::UNIX_EPOCH + Duration::from_secs(ctime as u64),
+            mtime: SystemTime::UNIX_EPOCH + Duration::from_secs(mtime as u64),
+            atime: SystemTime::UNIX_EPOCH + Duration::from_secs(atime as u64),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct INode {
     block: u16,
     dirty: bool,
     filename: String,
-    size: u16,
+    stat: Stat,
     blocks: Vec<u16>,
 }
 
@@ -118,7 +161,7 @@ impl INode {
             block,
             dirty: true,
             filename,
-            size: 0,
+            stat: Stat::new(),
             blocks: Vec::new(),
         }
     }
@@ -130,7 +173,7 @@ impl INode {
         let data = disk.read_block(block as usize)?;
         let INodeData {
             filename,
-            size,
+            stat,
             blocks,
         }: INodeData = bincode::deserialize(&data)?;
 
@@ -145,7 +188,7 @@ impl INode {
             block,
             dirty: false,
             filename: CString::new(filename)?.into_string().unwrap(),
-            size,
+            stat: stat.into(),
             blocks: blocks.iter().filter(|b| **b != 0).copied().collect(),
         })
     }
@@ -155,7 +198,7 @@ impl INode {
         self.blocks.push(block);
     }
 
-    pub fn sync<const BLOCK_SIZE: usize>(&mut self, disk: &mut Disk<BLOCK_SIZE>) -> TfsResult<()> {
+    pub fn sync(&mut self, disk: &mut Disk<BLOCK_SIZE>) -> TfsResult<()> {
         if self.dirty {
             disk.write_block(
                 self.block as usize,
@@ -203,7 +246,7 @@ impl Root {
         self.inodes.len() - 1
     }
 
-    pub fn sync<const BLOCK_SIZE: usize>(&mut self, disk: &mut Disk<BLOCK_SIZE>) -> TfsResult<()> {
+    pub fn sync(&mut self, disk: &mut Disk<BLOCK_SIZE>) -> TfsResult<()> {
         for inode in self.inodes.iter_mut() {
             inode.sync(disk)?;
         }
@@ -218,6 +261,12 @@ impl Root {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadDirEntry<'a> {
+    pub filename: &'a str,
+    pub stat: &'a Stat,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -297,6 +346,7 @@ impl Tfs {
             .or_else(|| self.create_inode(filename.to_string()).ok());
         self.sync()?;
         if let Some(inode) = inode {
+            self.root.inodes[inode].stat.atime = SystemTime::now();
             self.open_files.push(TfsFile { inode, offset: 0 });
             Ok(TfsDesc(self.open_files.len() - 1))
         } else {
@@ -310,6 +360,7 @@ impl Tfs {
             .get_mut(desc.0)
             .ok_or(TfsError::InvalidDesc)?;
         let inode = self.root.inodes.get_mut(file.inode).unwrap();
+        inode.stat.mtime = SystemTime::now();
         for bytes in buf.chunks(BLOCK_SIZE) {
             let block = self
                 .superblock
@@ -325,7 +376,7 @@ impl Tfs {
                 bytes.try_into().unwrap()
             };
             self.disk.write_block(block as usize, bytes)?;
-            inode.size += bytes_written as u16;
+            inode.stat.size += bytes_written as u16;
             file.offset += bytes_written;
         }
         file.offset = 0;
@@ -339,7 +390,8 @@ impl Tfs {
             .get_mut(desc.0)
             .ok_or(TfsError::InvalidDesc)?;
         let inode = self.root.inodes.get_mut(file.inode).unwrap();
-        if file.offset >= inode.size as usize {
+        inode.stat.atime = SystemTime::now();
+        if file.offset >= inode.stat.size as usize {
             return Ok(None);
         }
         let block = inode.blocks.get(file.offset / BLOCK_SIZE).unwrap();
@@ -347,6 +399,31 @@ impl Tfs {
         let byte = block[file.offset % BLOCK_SIZE];
         file.offset += 1;
         Ok(Some(byte))
+    }
+
+    pub fn readdir<'a>(&'a self) -> impl Iterator<Item = ReadDirEntry<'a>> {
+        self.root
+            .inodes
+            .iter()
+            .map(|INode { filename, stat, .. }| ReadDirEntry { filename, stat })
+    }
+
+    pub fn rename(&mut self, oldname: &str, newname: &str) -> TfsResult<()> {
+        let inode = self
+            .root
+            .inodes
+            .iter_mut()
+            .find(|inode_| inode_.filename == oldname)
+            .ok_or_else(|| TfsError::FileNotFound(oldname.to_string()))?;
+        inode.stat.mtime = SystemTime::now();
+        inode.filename = newname.to_string();
+        Ok(())
+    }
+
+    pub fn stat(&self, desc: TfsDesc) -> TfsResult<&Stat> {
+        let file = self.open_files.get(desc.0).ok_or(TfsError::InvalidDesc)?;
+        let inode = self.root.inodes.get(file.inode).unwrap();
+        Ok(&inode.stat)
     }
 
     pub fn sync(&mut self) -> TfsResult<()> {
