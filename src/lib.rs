@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     ffi::CString,
     path::Path,
     time::{Duration, SystemTime},
@@ -269,24 +270,88 @@ pub struct ReadDirEntry<'a> {
     pub stat: &'a Stat,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct TfsDesc(usize);
-
-#[derive(Debug, Clone, Copy)]
-pub struct TfsFile {
+#[derive(Debug)]
+pub struct TfsFsFile {
     inode: usize,
     offset: usize,
 }
 
 #[derive(Debug)]
+pub struct TfsFile<'a> {
+    filesystem: &'a RefCell<TfsFs>,
+    file: TfsFsFile,
+}
+
+impl<'a> TfsFile<'a> {
+    pub fn write(&mut self, buf: &[u8]) -> TfsResult<()> {
+        self.filesystem.borrow_mut().write(&mut self.file, buf)
+    }
+
+    pub fn read_byte(&mut self, file: &mut TfsFsFile) -> TfsResult<Option<u8>> {
+        self.filesystem.borrow_mut().read_byte(file)
+    }
+
+    pub fn rename(&mut self, oldname: &str, newname: &str) -> TfsResult<()> {
+        self.filesystem.borrow_mut().rename(oldname, newname)
+    }
+
+    pub fn stat(&self, file: TfsFsFile) -> TfsResult<Stat> {
+        self.filesystem.borrow_mut().stat(file)
+    }
+}
+
+#[derive(Debug)]
 pub struct Tfs {
-    superblock: SuperBlock,
-    root: Root,
-    open_files: Vec<TfsFile>,
-    disk: Disk<BLOCK_SIZE>,
+    tfs: RefCell<TfsFs>,
 }
 
 impl Tfs {
+    pub fn new(disk: Disk<BLOCK_SIZE>) -> Self {
+        Self {
+            tfs: RefCell::new(TfsFs::new(disk)),
+        }
+    }
+
+    pub fn mkfs(path: impl AsRef<Path>, size: usize) -> TfsResult<()> {
+        TfsFs::mkfs(path, size)
+    }
+
+    pub fn mount(path: impl AsRef<Path>) -> TfsResult<Self> {
+        let tfs = TfsFs::mount(path)?;
+        Ok(Self {
+            tfs: RefCell::new(tfs),
+        })
+    }
+
+    pub fn open(&mut self, filename: impl AsRef<Path>) -> TfsResult<TfsFile> {
+        let mut tfs = self.tfs.borrow_mut();
+        let file = tfs.open(filename)?;
+        Ok(TfsFile {
+            filesystem: &self.tfs,
+            file,
+        })
+    }
+
+    pub fn sync(&mut self) -> TfsResult<()> {
+        // TODO: sync only this file not the whole filesystem
+        self.tfs.borrow_mut().sync()
+    }
+}
+
+impl Drop for Tfs {
+    fn drop(&mut self) {
+        let _ = self.sync();
+    }
+}
+
+#[derive(Debug)]
+pub struct TfsFs {
+    superblock: SuperBlock,
+    root: Root,
+    disk: Disk<BLOCK_SIZE>,
+}
+
+impl TfsFs {
     pub fn new(disk: Disk<BLOCK_SIZE>) -> Self {
         let mut superblock = SuperBlock::new();
         superblock.mark_allocated(0);
@@ -294,7 +359,6 @@ impl Tfs {
         Self {
             superblock,
             root: Root::new(),
-            open_files: Vec::new(),
             disk,
         }
     }
@@ -304,7 +368,7 @@ impl Tfs {
         for i in 0..(size / BLOCK_SIZE) {
             disk.write_block(i, [0; BLOCK_SIZE])?;
         }
-        Tfs::new(disk).sync()?;
+        TfsFs::new(disk).sync()?;
 
         Ok(())
     }
@@ -321,7 +385,6 @@ impl Tfs {
         Ok(Self {
             superblock: superblock.into(),
             root: Root::from_data(root, &mut disk)?,
-            open_files: Vec::new(),
             disk,
         })
     }
@@ -334,7 +397,7 @@ impl Tfs {
         Ok(self.root.create_inode(inode, filename))
     }
 
-    pub fn open(&mut self, filename: impl AsRef<Path>) -> TfsResult<TfsDesc> {
+    pub fn open(&mut self, filename: impl AsRef<Path>) -> TfsResult<TfsFsFile> {
         let filename = filename.as_ref().to_str().unwrap();
         let inode = self
             .root
@@ -347,18 +410,17 @@ impl Tfs {
         self.sync()?;
         if let Some(inode) = inode {
             self.root.inodes[inode].stat.atime = SystemTime::now();
-            self.open_files.push(TfsFile { inode, offset: 0 });
-            Ok(TfsDesc(self.open_files.len() - 1))
+            Ok(TfsFsFile { inode, offset: 0 })
         } else {
             Err(TfsError::OutOfSpace)
         }
     }
 
-    pub fn write(&mut self, desc: TfsDesc, buf: &[u8]) -> TfsResult<()> {
-        let file = self
-            .open_files
-            .get_mut(desc.0)
-            .ok_or(TfsError::InvalidDesc)?;
+    pub fn close(&mut self, _file: &mut TfsFsFile) -> TfsResult<()> {
+        self.sync()
+    }
+
+    pub fn write(&mut self, file: &mut TfsFsFile, buf: &[u8]) -> TfsResult<()> {
         let inode = self.root.inodes.get_mut(file.inode).unwrap();
         inode.stat.mtime = SystemTime::now();
         for bytes in buf.chunks(BLOCK_SIZE) {
@@ -384,11 +446,7 @@ impl Tfs {
         Ok(())
     }
 
-    pub fn read_byte(&mut self, desc: TfsDesc) -> TfsResult<Option<u8>> {
-        let file = self
-            .open_files
-            .get_mut(desc.0)
-            .ok_or(TfsError::InvalidDesc)?;
+    pub fn read_byte(&mut self, file: &mut TfsFsFile) -> TfsResult<Option<u8>> {
         let inode = self.root.inodes.get_mut(file.inode).unwrap();
         inode.stat.atime = SystemTime::now();
         if file.offset >= inode.stat.size as usize {
@@ -420,10 +478,9 @@ impl Tfs {
         Ok(())
     }
 
-    pub fn stat(&self, desc: TfsDesc) -> TfsResult<&Stat> {
-        let file = self.open_files.get(desc.0).ok_or(TfsError::InvalidDesc)?;
+    pub fn stat(&self, file: TfsFsFile) -> TfsResult<Stat> {
         let inode = self.root.inodes.get(file.inode).unwrap();
-        Ok(&inode.stat)
+        Ok(inode.stat.clone())
     }
 
     pub fn sync(&mut self) -> TfsResult<()> {
@@ -433,9 +490,10 @@ impl Tfs {
     }
 }
 
-impl Drop for Tfs {
+impl Drop for TfsFs {
     fn drop(&mut self) {
-        self.sync().unwrap();
+        // nothing can be done if sync fails in drop
+        let _ = self.sync();
     }
 }
 
@@ -448,7 +506,7 @@ mod tests {
     #[test]
     fn mkfs_works() {
         const DISK_PATH: &str = "mkfs-disk.bin";
-        Tfs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
+        TfsFs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
         let mut disk: Disk<BLOCK_SIZE> = Disk::open(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
         let superblock = disk.read_block(0).unwrap();
         let superblock: SuperBlockData = bincode::deserialize(&superblock).unwrap();
@@ -460,16 +518,16 @@ mod tests {
     #[test]
     fn mount_works() {
         const DISK_PATH: &str = "mount-disk.bin";
-        Tfs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
-        let _tfs = Tfs::mount(DISK_PATH).unwrap();
+        TfsFs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
+        let _tfs = TfsFs::mount(DISK_PATH).unwrap();
         fs::remove_file(DISK_PATH).unwrap();
     }
 
     #[test]
     fn open_works() {
         const DISK_PATH: &str = "open-disk.bin";
-        Tfs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
-        let mut tfs = Tfs::mount(DISK_PATH).unwrap();
+        TfsFs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
+        let mut tfs = TfsFs::mount(DISK_PATH).unwrap();
         let _desc = tfs.open("test.txt").unwrap();
         fs::remove_file(DISK_PATH).unwrap();
     }
@@ -477,17 +535,17 @@ mod tests {
     #[test]
     fn write_works() {
         const DISK_PATH: &str = "write-disk.bin";
-        Tfs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
+        TfsFs::mkfs(DISK_PATH, DEFAULT_DISK_SIZE).unwrap();
         {
-            let mut tfs = Tfs::mount(DISK_PATH).unwrap();
-            let desc = tfs.open("test.txt").unwrap();
-            tfs.write(desc, &"Hello, World!".as_bytes()).unwrap();
+            let mut tfs = TfsFs::mount(DISK_PATH).unwrap();
+            let mut desc = tfs.open("test.txt").unwrap();
+            tfs.write(&mut desc, &"Hello, World!".as_bytes()).unwrap();
             let harry = include_bytes!("../harry-sm.jpg");
-            let desc2 = tfs.open("cat.jpg").unwrap();
-            tfs.write(desc2, harry).unwrap();
+            let mut desc2 = tfs.open("cat.jpg").unwrap();
+            tfs.write(&mut desc2, harry).unwrap();
         }
         {
-            let tfs = Tfs::mount(DISK_PATH).unwrap();
+            let tfs = TfsFs::mount(DISK_PATH).unwrap();
             assert_eq!(tfs.root.inodes.len(), 2);
         }
         fs::remove_file(DISK_PATH).unwrap();
