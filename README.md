@@ -1,5 +1,9 @@
 # CSC 453 Lab 4 - TinyFS RS
 
+## Demo
+
+![Video Demo of TinyFS RS](video-demo.mp4)
+
 ## Names
 
 Benjamin Hinchliff (bhinchli@calpoly.edu)
