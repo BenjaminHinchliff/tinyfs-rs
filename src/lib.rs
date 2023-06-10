@@ -265,9 +265,9 @@ impl Root {
 }
 
 #[derive(Debug, Clone)]
-pub struct ReadDirEntry<'a> {
-    pub filename: &'a str,
-    pub stat: &'a Stat,
+pub struct ReadDirEntry {
+    pub filename: String,
+    pub stat: Stat,
 }
 
 #[derive(Debug)]
@@ -287,12 +287,12 @@ impl<'a> TfsFile<'a> {
         self.filesystem.borrow_mut().write(&mut self.file, buf)
     }
 
-    pub fn read_byte(&mut self, file: &mut TfsFsFile) -> TfsResult<Option<u8>> {
-        self.filesystem.borrow_mut().read_byte(file)
+    pub fn read_byte(&mut self) -> TfsResult<Option<u8>> {
+        self.filesystem.borrow_mut().read_byte(&mut self.file)
     }
 
-    pub fn rename(&mut self, oldname: &str, newname: &str) -> TfsResult<()> {
-        self.filesystem.borrow_mut().rename(oldname, newname)
+    pub fn rename(&mut self, newname: &str) -> TfsResult<()> {
+        self.filesystem.borrow_mut().rename(&mut self.file, newname)
     }
 
     pub fn stat(&self, file: TfsFsFile) -> TfsResult<Stat> {
@@ -323,6 +323,10 @@ impl Tfs {
         })
     }
 
+    pub fn readdir<'a>(&'a self) -> Vec<ReadDirEntry> {
+        self.tfs.borrow().readdir().collect()
+    }
+
     pub fn open(&mut self, filename: impl AsRef<Path>) -> TfsResult<TfsFile> {
         let mut tfs = self.tfs.borrow_mut();
         let file = tfs.open(filename)?;
@@ -340,7 +344,7 @@ impl Tfs {
 
 impl Drop for Tfs {
     fn drop(&mut self) {
-        let _ = self.sync();
+        self.sync().unwrap();
     }
 }
 
@@ -459,20 +463,18 @@ impl TfsFs {
         Ok(Some(byte))
     }
 
-    pub fn readdir<'a>(&'a self) -> impl Iterator<Item = ReadDirEntry<'a>> {
+    pub fn readdir<'a>(&'a self) -> impl Iterator<Item = ReadDirEntry> + 'a {
         self.root
             .inodes
             .iter()
-            .map(|INode { filename, stat, .. }| ReadDirEntry { filename, stat })
+            .map(|INode { filename, stat, .. }| ReadDirEntry {
+                filename: filename.to_string(),
+                stat: stat.clone(),
+            })
     }
 
-    pub fn rename(&mut self, oldname: &str, newname: &str) -> TfsResult<()> {
-        let inode = self
-            .root
-            .inodes
-            .iter_mut()
-            .find(|inode_| inode_.filename == oldname)
-            .ok_or_else(|| TfsError::FileNotFound(oldname.to_string()))?;
+    pub fn rename(&mut self, file: &mut TfsFsFile, newname: &str) -> TfsResult<()> {
+        let inode = self.root.inodes.get_mut(file.inode).unwrap();
         inode.stat.mtime = SystemTime::now();
         inode.filename = newname.to_string();
         Ok(())
@@ -493,7 +495,7 @@ impl TfsFs {
 impl Drop for TfsFs {
     fn drop(&mut self) {
         // nothing can be done if sync fails in drop
-        let _ = self.sync();
+        self.sync().unwrap()
     }
 }
 
