@@ -2,7 +2,8 @@
 
 ## Demo
 
-![Video Demo of TinyFS RS](video-demo.mp4)
+[video-demo.webm](https://github.com/BenjaminHinchliff/tinyfs-rs/assets/46175830/4871b3b4-1a5c-47b5-83bc-a4ccad16af91)
+
 
 ## Names
 
